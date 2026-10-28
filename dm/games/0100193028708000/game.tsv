@@ -1,0 +1,41 @@
+# Frostpunk Demo (11 bit studios' Liquid Engine on NVN), SDK 20.5.19, base game v0 (display version 1.0.0).
+# Started from the NSP script's provisional profile (dm/games/profile_guess.py): the memory values are the survey's guesses, not measured; see README.md
+
+# ---- Identity ----
+title_id	0100193028708000
+program_id	0100193028708000
+
+# ---- App ----
+name	Frostpunk Demo
+ipa	FrostpunkDemo.ipa
+app_category	public.app-category.games
+
+# ---- Versions ----
+build	v0	1.0.0	main=b4742a53272884dbb3dd7c099dcb97bf	sdk=8bfebccd6f5c1392597b364b9ab22a8d
+package	v0
+shader_versions	v0
+
+# ---- Files ----
+# every module main imports from
+modules	main sdk
+romfs_marker	sounds.dat
+zip_store	.dat:.metallib
+
+# ---- Memory ----
+# main sets a heap of at most the pool − 64 MB: a 3328 MB heap region
+mem_reserve	0x100000000
+mem_alias	0x10000000
+mem_stack	0x10000000
+app_pool	0xCD500000
+# the NPDM declares 0 MB of system resource: IsVirtualAddressMemoryEnabled is false, as on Horizon (Big Brain Academy: Brain vs. Brain sets a heap only then)
+sys_resource	0x0
+
+# ---- Shader split ----
+shader_groups	/=romfs
+shader_note	Frostpunk Demo shaders (provisional profile)
+
+# ---- After the rewrite ----
+# used memory for the current rewritten modules, at least the default 64 MB
+mem_used	0x5c00000
+# mesh shaders read a pointer per instance from c16 and their instance data through it (GlobalToStorage.cs global memory window)
+shader_global_window	on

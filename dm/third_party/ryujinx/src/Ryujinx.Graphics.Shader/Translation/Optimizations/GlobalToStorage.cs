@@ -582,6 +582,54 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
             return true;
         }
 
+        // nxnative: the constant buffer slot whose dynamically indexed load (an LDC with a register offset) the global address is built from, through 32/64-bit adds,
+        // copies and phis; -1 when there is none within a few steps
+        private static int FindDynamicCbufSource(ResourceManager resourceManager, Operand address)
+        {
+            Queue<(Operand, int)> queue = new();
+            HashSet<INode> visited = [];
+
+            queue.Enqueue((address, 0));
+
+            while (queue.TryDequeue(out (Operand operand, int depth) item))
+            {
+                INode node = item.operand.AsgOp;
+
+                if (node == null || item.depth > 8 || !visited.Add(node))
+                {
+                    continue;
+                }
+
+                if (node is Operation op &&
+                    op.Inst == Instruction.Load &&
+                    op.StorageKind == StorageKind.ConstantBuffer &&
+                    op.SourcesCount > 0 &&
+                    op.GetSource(0).Type == OperandType.Constant &&
+                    (op.SourcesCount < 3 || op.GetSource(2).Type != OperandType.Constant) &&
+                    resourceManager.TryGetConstantBufferSlot(op.GetSource(0).Value, out int slot))
+                {
+                    return slot;
+                }
+
+                if (node is Operation op2 && (op2.Inst == Instruction.Add || op2.Inst == Instruction.Copy || op2.Inst == Instruction.PackDouble2x32))
+                {
+                    for (int i = 0; i < op2.SourcesCount; i++)
+                    {
+                        queue.Enqueue((op2.GetSource(i), item.depth + 1));
+                    }
+                }
+                else if (node is PhiNode phi)
+                {
+                    for (int i = 0; i < phi.SourcesCount; i++)
+                    {
+                        queue.Enqueue((phi.GetSource(i), item.depth + 1));
+                    }
+                }
+            }
+
+            return -1;
+        }
+
         private static bool TryGenerateMultiTargetStorageOp(
             GtsContext gtsContext,
             ResourceManager resourceManager,
@@ -655,7 +703,22 @@ namespace Ryujinx.Graphics.Shader.Translation.Optimizations
 
             if (targetCbs.Count == 0)
             {
-                gpuAccessor.Log($"Failed to find storage buffer for global memory operation \"{operation.Inst}\".");
+                // nxnative: a global address no storage buffer descriptor gives (Frostpunk's mesh shaders read a pointer per instance from a uniform buffer array indexed by the instance ID)
+                // goes through the host's global memory window instead: a driver-table storage buffer entry the host fills with the memory pool the pointer source points into
+                int windowCbOffset = gpuAccessor.QueryGlobalMemoryWindowCbOffset();
+                int sourceCb = FindDynamicCbufSource(resourceManager, operation.GetSource(0));
+
+                if (windowCbOffset >= 0)
+                {
+                    targetCbs.Add(PackCbSlotAndOffset(DriverReservedCb, windowCbOffset));
+                    gpuAccessor.Log(sourceCb >= 0
+                        ? $"Global memory window for \"{operation.Inst}\": base pointer from c{sourceCb}."
+                        : $"Global memory window for \"{operation.Inst}\": base pointer source not found.");
+                }
+                else
+                {
+                    gpuAccessor.Log($"Failed to find storage buffer for global memory operation \"{operation.Inst}\".");
+                }
             }
 
             if (gtsContext.TryGetFunctionId(operation, isMultiTarget: true, targetCbs, out functionId))

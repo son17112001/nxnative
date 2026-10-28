@@ -38,6 +38,7 @@
 #   · SNVN (Retro Studios, Donkey Kong Country: Tropical Freeze): zlib program records in the SNVN chunks of MaterialArchive.arc, of the MTRL resources in its .pak archives
 #       and of the startup material archive LZSS-compressed in main, see rfrm_shaders and retro_main_forms
 #   · BERG (Snowdrop, Mario + Rabbids Sparks of Hope): shader objects in the individually zstd-compressed records of its SDF data slices, see snowdrop_shaders
+#   · Liquid Engine (11 bit studios, Frostpunk): one program of one stage per *.vs_5_0 / *.ps_5_0 / ... entry of the .idx/.str/.dat archives (liquid.py), a 36-byte header + code area + control section, see liquid_shader
 # Code area: 0x30 header + (graphics) 0x50 SPH + instructions; header magic 0x12345678 for graphics, 0x12345679 for compute. The control section starts with 0x98761234, +0x704 = code area length,
 #   +0x700 = start of the c1 constant segment within the code area; for compute +0x748 thread group xyz (u32 ×3), +0x754 shared memory bytes (checked one by one against PC reflection on D2R's 22 compute shaders).
 # Stage: BNSH uses the stage slot; BAHS uses bits 10..13 of SPH word 0 (1 vertex 2 hull 3 domain 4 geometry 5 pixel), and a compute header means compute.
@@ -54,7 +55,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../../tools'))
 from romfs import os, open, is_image
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../games')); import game as _game
 from profile_guess import glsl_sources
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__))); import uepak, liquid
 GAME = _game.load()   # the current game profile (DM_GAME, required): source group rules and the table header note
 GROUPS, NOTE = GAME.pairs('shader_groups'), GAME.get('shader_note')
 # The sources are what the game files hold, with no profile switch: GLSLC outputs in main (glslc_shaders), the outputs the game compiles at run time when a capture is there (DM_GLSLC_CAPTURE,
@@ -1426,6 +1427,27 @@ def phyre_shaders(d, label):
     return out
 
 
+LIQUID_SHADER = re.compile(r'\.(vs|hs|ds|gs|ps|cs)_\d_\d$')   # Frostpunk's common archive: shaders/compiled/<effect>/<variant>.<stage>_5_0, 2,141 entries
+def liquid_shader(d, label):
+    """A Liquid Engine shader entry: 36-byte header {u32 0xcdbe5660, u32 version 4, two u64 stamps, u32 code + control + 8, u32 code length (+0x1c), u32 control length (+0x20)}, then the code area,
+    then the control section, then the engine's own reflection data. Frostpunk compiles each D3D-style stage on its own (1,361 pixel, 676 vertex, 75 compute, 14 hull, 14 domain, 1 geometry)
+    and binds them together per draw, so each is a program of one stage"""
+    magic, version = field(d, '<II', 0, label)
+    if magic != 0xcdbe5660 or version != 4: red(f'{label}: Liquid Engine shader header {magic:#x} version {version}, not 0xcdbe5660 version 4')
+    ncode, nctl = field(d, '<II', 0x1c, label)
+    code, ctl = span(d, 0x24, ncode, f'{label} code area'), span(d, 0x24 + ncode, nctl, f'{label} control section')
+    st = glslc_stage(ctl, code)
+    why = check(label, st, ctl, code) if st else 'no stage in the code area header'
+    if why: red(f'{label}: {why}')
+    return (f'{label}#LIQUID@0x24', st, ctl, code)
+
+def liquid_shaders(path, label, out):
+    """The shader entries of a Liquid Engine archive (liquid.is_archive), by name; the other entries (templates, textures, sounds) are not read"""
+    zstd = zstd_mod()
+    with open(path, 'rb') as f:
+        for e in liquid.entries(path):
+            if LIQUID_SHADER.search(e[0]): out.append(liquid_shader(liquid.read(f, e, zstd), f'{label}/{e[0]}'))
+
 def raw_shaders(d, label, known=()):
     """Control sections in main that are in no GLSLC output and no BNSH file: a shader compiled offline whose control section and code area the code hands to nvnShaderData itself (Advance Wars 1+2:
     Re-Boot Camp, Unity 2020.2 with Bink 2: the movie player's 32: 2 vertex, 22 pixel and 8 compute shaders; without them its movies drew white). Most are 0x20-byte records in data {code area
@@ -2094,7 +2116,7 @@ def pixel_input_cover(shaders):
         k = min(ins, key=lambda k: (-len(ins[k] & left), k)); cover.append(k); left -= ins[k]
     return cover
 
-SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
+SINGLE_STAGE = ('#GLSLC@', '#UE', '#MTSPK@', '#MGFX@', '#NLG', '#PGSO', '#RAW@', '#TFXO@', '#NEEDLE@', '#SNOWDROP@', '#PHYRE@', '#LIQUID@')   # sources whose every shader is a program of one stage: GLSLC outputs, Unreal's shader records, MT Framework's shader package (BNSH variations, Unity programs, MSHD and SDF pair theirs);
 # MonoGame's effects, whose passes may name no vertex shader and keep the one bound (Celeste: 10 of its 13 effects draw through SpriteBatch's vertex shader, which is in main); Next Level Games'
 # archives (Luigi's Mansion 3 makes 5,317 programs of one stage each at boot); PlatinumGames' shader objects (Bayonetta 3: one stage each, pg_shader); control sections loose in main
 # (Advance Wars 1+2: Re-Boot Camp's Bink shaders, raw_shaders), which no file pairs; and YEBIS's effect file (tfxo_shaders)
@@ -2224,6 +2246,9 @@ def scan_file_in(args):
                 # Compiled effects and loose GPU programs; texture and sound members carry no shader programs.
                 if '.fx' in entry[0] or '/shaders/' in entry[0] or entry[0].endswith(('.vs.bin', '.ps.bin', '.fs.bin')):
                     found += phyre_shaders(vbf.read(f, entry), f'/{rel}/{entry[0]}')
+        return rel, uniq_keys(found), var_pairs(found), trees
+    if ext == '.dat' and liquid.is_archive(path):   # a Liquid Engine archive (Frostpunk): its shader entries by name. Read whole, common.dat decoded to all 2,225 entries (20 MB, every shader in it), but no reader knew a Liquid shader entry, so the prefilter below dropped it; sounds.dat (785 MB of Ogg) was read and searched for nothing
+        liquid_shaders(path, '/' + rel, found)
         return rel, uniq_keys(found), var_pairs(found), trees
     if head[:4] == ZSTD_MAGIC: d = unzs(path)   # by the magic: Paper Mario: The Thousand-Year Door names its zstd files .zst (8,726, its shaders among them)
     else:

@@ -95,6 +95,7 @@ dm/tools/nx_extract/*	*:*	NSP extraction: every game's resource inputs
 dm/mac/launcher.c	*:*	Mac app resource discovery and host launch
 dm/mac/pack_app.py	*:*	Mac app packaging: every game's bundled resources
 dm/gfx/tools/cpk.py	shader:stage:*	CRI archive input to shader scanning
+dm/gfx/tools/liquid.py	shader:stage:*	Liquid Engine archive input to shader scanning
 dm/gfx/tools/vbf.py	shader:stage:*	Virtuos archive input to shader scanning
 dm/gfx/tools/dmsh_mesh.py	shader:stage:gs	passthrough geometry composed into a mesh shader
 dm/host/hle_fpslock.c	present:*	build-gated engine frame limits and dynamic resolution

@@ -368,7 +368,8 @@ def job_for(key, name, rec, w):
     cp = os.path.join(w, key + '.bin'); open(cp, 'wb').write(code)
     tf = tf_layout(key, rec[ci:]) if stage in ('vs', 'gs') else None
     j = {'key': key, 'stage': stage, 'code': cp, 'tex': {}, 'img': {}, 'attr': {}, 'fout': {}, 'c1': c1.hex(), **({'tf': tf} if tf else {}),
-         'debug': os.environ.get('XLATE_DEBUG', '1') != '0', 'reduced': os.environ.get('XLATE_REDUCED', '1') == '1'}   # translation options (see dmsh_xlate/Program.cs); relaxed precision is on by default (GPU float last-bit error does not enter game state, whole frame −26% on the second Mac)   # c1: used by the translator to read indirect jump tables
+         'debug': os.environ.get('XLATE_DEBUG', '1') != '0', 'reduced': os.environ.get('XLATE_REDUCED', '1') == '1',
+         'global_window': GAME.get('shader_global_window', 'off') == 'on'}   # translation options (see dmsh_xlate/Program.cs); relaxed precision is on by default (GPU float last-bit error does not enter game state, whole frame −26% on the second Mac)   # c1: used by the translator to read indirect jump tables
     if key not in FACTS: j['no_facts'] = True; return j, c1   # not in the answer table: queries use defaults (listed separately in the summary)
     j.update(FACTS[key])
     return j, c1
@@ -567,6 +568,12 @@ def reflect(key, stage, msl, res):
                 e.update(kind=abi.KIND_SBUF_UBO, reg=b['cb_slot'] - 3, off=b['cb_offset'] * 4)
             else: e['reg'] = (off - base) // abi.C0_ROW if off is not None and base is not None and 0 <= off - base < abi.C0_ROW * abi.C0_SSBO_SLOTS and (off - base) % abi.C0_ROW == 0 else None
             e['rw'] = bool(b and b['flags'] & 1)   # BufferUsageFlags.Write; Program.cs serializes the translator enum unchanged (atomics count as writes too)
+            # the global memory window (profile key shader_global_window, GlobalToStorage.cs): the translator put the accesses it could not trace to a storage buffer on the stage's last
+            # c0 slot; the host fills that slot with the memory pool the first pointer of uniform slot gmem points into (nvn_mtl.m gmem_window). -1: it found no pointer source
+            win = [n for n in res.get('notes', ()) if n.startswith('translator: Global memory window')]
+            if win and e.get('reg') == abi.C0_SSBO_SLOTS - 1:
+                src = [int(m.group(1)) for n in win for m in [re.search(r'base pointer from c(\d+)\.', n)] if m and int(m.group(1)) >= 3]
+                e['gmem'] = src[0] - 3 if src and len(set(src)) == 1 else -1
     return binds
 
 DRV_FILL = {0: [(b, b + abi.C0_ROW * abi.C0_SSBO_SLOTS) for b in sorted(SSBO.values())],   # c0: storage buffer address tables (vertex / compute / geometry / pixel)

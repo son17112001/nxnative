@@ -206,6 +206,15 @@ namespace Ryujinx.Graphics.Shader
         }
 
         /// <summary>
+        /// nxnative: word offset in the driver constant buffer (c0) of the storage buffer descriptor the host fills as a global memory window,
+        /// used for global memory accesses whose address no storage buffer descriptor gives; -1 when the host has none.
+        /// </summary>
+        int QueryGlobalMemoryWindowCbOffset()
+        {
+            return -1;
+        }
+
+        /// <summary>
         /// Queries host storage buffer alignment required.
         /// </summary>
         /// <returns>Host storage buffer alignment in bytes</returns>

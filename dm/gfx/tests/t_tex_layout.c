@@ -1,7 +1,9 @@
 // Texture storage against shapes the original NVN driver gives (digitalhivehub ran Tears of the Kingdom's driver under emulation, nxnative PR #11; MacNativeGames 3c482a7):
 // cube array depth counts layer-faces, packaged byte 0 = block height (low nibble) and block depth (high nibble), linear storage (LINEAR or LINEAR_RENDER_TARGET alone)
-// counts pixel rows, also for BC. pkg is byte 0 + 1 (0 = automatic), as nvn_texdesc stores it. The driver's MINIMAL_LAYOUT shapes (flag 0x200) are not here: nvn_tex.c
-// does not implement that flag. The sparse (flag 0x20) shapes are block heights read off a game's guest bytes instead: a sparse texture at least one 64 KB tile wide and high
+// counts pixel rows, also for BC. pkg is byte 0 + 1 (0 = automatic), as nvn_texdesc stores it. The MINIMAL_LAYOUT shapes (flag 0x200) are not from the driver but from
+// Frostpunk's textures-s3.dat: each .texture file holds the storage the game hands NVN, and all 3,585 sizes match the automatic block kept only where it divides the
+// level's GOB rows (slices), else one GOB, with layers not rounded up to a block (the automatic layout matches 2,827 of them); the block heights are the ones whose
+// decoded content reads right (see minimal_of in nvn_tex.c). The sparse (flag 0x20) shapes are block heights read off a game's guest bytes instead: a sparse texture at least one 64 KB tile wide and high
 // takes its tile's block height (384x384 DXT5, 1350x270 BGRA8), a smaller one keeps the automatic one (192x160 DXT5 and 384x384 DXT1, Yoshi's Crafted World)
 #include <stdio.h>
 #include "../nvn/nvn_tex.h"
@@ -21,6 +23,14 @@ static const shape_t driver[] = {
     {"sparse DXT1 384x384, narrower than a tile",   1, 0x45, 0x20, 384, 384, 1, 1, 0, 0,     0x20000, 0x20000, 0, 0x10000, 4, 0},
     {"sparse DXT5 384x384, a tile wide",            1, 0x48, 0x20, 384, 384, 1, 1, 0, 0,     0x40000, 0x40000, 0, 0x10000, 3, 0},
     {"sparse BGRA8 1350x270",                       1, 0x9c, 0x20, 1350, 270, 1, 1, 0, 0,    0x210000, 0x210000, 0, 0x10000, 4, 0},
+    {"minimal DXT5 sRGB 508x268",                   1, 0x48, 0x200, 508, 268, 1, 1, 0, 0,    147456, 147456, 0, 512, 0, 0},
+    {"minimal cube DXT5 sRGB 256x256, 9 levels",    8, 0x48, 0x200, 256, 256, 1, 9, 0, 0,    537600, 89600, 65536, 512, 3, 0},
+    {"minimal 3D RGBA8 25^3",                       2, 0x25, 0x200, 25, 25, 25, 1, 0, 0,     102400, 102400, 0, 512, 0, 0},
+    {"minimal 2D array RGBA8 512x512x9, 10 levels", 4, 0x25, 0x200, 512, 512, 9, 10, 0, 0,   12598272, 1399808, 1048576, 512, 4, 0},
+    {"minimal R8 768x768, 10 levels",               1, 0x01, 0x200, 768, 768, 1, 10, 0, 0,   793600, 793600, 589824, 512, 4, 0},
+    {"minimal R8 1328x1328, 11 levels",             1, 0x01, 0x200, 1328, 1328, 1, 11, 0, 0, 2432000, 2432000, 1784832, 512, 0, 0},
+    {"minimal DXT5 sRGB 1280x1280, 11 levels",      1, 0x48, 0x200, 1280, 1280, 1, 11, 0, 0, 2189824, 2189824, 1638400, 512, 0, 0},
+    {"minimal R8 4096x176 (font atlas)",            1, 0x01, 0x200, 4096, 176, 1, 1, 0, 0,   720896, 720896, 0, 512, 0, 0},
 };
 
 int main(void) {
