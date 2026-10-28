@@ -18,7 +18,7 @@ from nso_asm import ADRP, ADDI, ADDR, B, BEQ, BLR, BR, NOP
 tree = ast.parse((TOOLS / 'patch_nso.py').read_text())
 IMG = bytearray(0x5000); tabjumps = {}; jumps = {}   # the globals the recognizers read: the module image and the jump tables resolved so far in the function
 scope = {'re': re, 'struct': struct, 'ARM64_OP_IMM': ARM64_OP_IMM, 'IMG': IMG, 'tabjumps': tabjumps, 'jumps': jumps}
-exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('num', 'copied_base', 'table_base', 'forward_table_base', 'check_before_copy', 'jump_offsets', 'jump_masked_pred', 'jump_masked_not')], type_ignores=[]), str(TOOLS / 'patch_nso.py'), 'exec'), scope)
+exec(compile(ast.Module(body=[n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in ('num', 'copied_base', 'table_base', 'forward_table_base', 'check_before_copy', 'jump_offsets', 'jump_masked_pred', 'jump_masked_not', 'jump_adr_bytes')], type_ignores=[]), str(TOOLS / 'patch_nso.py'), 'exec'), scope)
 
 
 def mov(dst, src, wide=True): return (0xaa0003e0 if wide else 0x2a0003e0) | src << 16 | dst
@@ -318,6 +318,84 @@ class MaskedComplement(unittest.TestCase):
                 self.assertIsNone(self.run_site(self.words()))
         struct.pack_into('<i', IMG, self.TABLE, 8 - self.TABLE)
         self.assertEqual(self.run_site(self.words()), [8] + self.TARGETS[1:])
+
+
+def adr(rd, frm, to): imm = to - frm; return 0x10000000 | (imm & 3) << 29 | ((imm >> 2) & 0x7ffff) << 5 | rd
+def bcond(frm, to, cond): return 0x54000000 | (((to - frm) >> 2) & 0x7ffff) << 5 | cond
+CMP_W17_4 = 0x7100001f | 4 << 10 | 17 << 5                # cmp w17, #4
+LDRB_W0_X3_X17 = 0x38606800 | 17 << 16 | 3 << 5            # ldrb w0, [x3, x17]
+ADD_X18_X18_X0_LSL2 = 0x8b000000 | 2 << 10 | 18 << 5 | 18   # add x18, x18, x0, lsl #2
+BL = 0x94000000
+
+
+class AdrBytes(unittest.TestCase):
+    """Byte entries ×4 after an adr, the br far below the dispatch (EA SPORTS FC 24 main+0x15746f4): adrp x3 + add (the table), cmp w17,#4; b.hi to the ret; mid; adr x18,#L;
+    ldrb w0,[x3,x17]; add x18,x18,x0,lsl #2; between (160 nops by default, as the 160 vector instructions there); br x18; L: five targets; ret; tail"""
+    TABLE = 0x4080
+    ENTRIES = [0, 1, 2, 4, 3]
+
+    def setUp(self): IMG[self.TABLE:self.TABLE + 5] = bytes(self.ENTRIES)
+
+    def words(self, mid=(), between=None, tail=()):
+        between = [NOP] * 160 if between is None else list(between)
+        k_adr = 4 + len(mid); k_br = k_adr + 3 + len(between); at = k_br + 1; ret = at + 5
+        w = ([ADRP(3, 0, self.TABLE), ADDI(3, 3, self.TABLE & 0xfff), CMP_W17_4, bcond(12, 4 * ret, 8)] + list(mid)
+             + [adr(18, 4 * k_adr, 4 * at), LDRB_W0_X3_X17, ADD_X18_X18_X0_LSL2] + between + [BR(18)] + [NOP] * 5 + [RET] + [t(4 * (ret + 1 + i), 4 * at) for i, t in enumerate(tail)])
+        return w, 4 * at
+
+    def site(self, words):
+        md = Cs(CS_ARCH_ARM64, CS_MODE_ARM); md.detail = True
+        ins = list(md.disasm(struct.pack('<' + 'I' * len(words), *words), 0))
+        self.assertEqual(len(ins), len(words))
+        return scope['jump_adr_bytes'](ins, next(i for i, p in enumerate(ins) if p.mnemonic == 'br'))
+
+    def test_recognized_far_from_the_br(self):
+        w, at = self.words()
+        self.assertEqual(self.site(w), [at + 4 * e for e in self.ENTRIES])
+
+    def test_vector_register_of_the_same_number_is_not_the_index(self):   # FC 24 loads ldp q6, q17, [x0, #0x10] between the check and the load
+        w, at = self.words(mid=[0xAD40C406])
+        self.assertEqual(self.site(w), [at + 4 * e for e in self.ENTRIES])
+
+    def test_index_changed_after_the_check(self):
+        self.assertIsNone(self.site(self.words(mid=[ADDI(17, 17, 1) & 0x7fffffff])[0]))   # add w17, w17, #1
+
+    def test_x18_written_or_call_before_the_br(self):
+        for clobber in (mov(18, 0), BL):
+            with self.subTest(clobber=hex(clobber)):
+                self.assertIsNone(self.site(self.words(between=[NOP] * 80 + [clobber] + [NOP] * 80)[0]))
+
+    def test_no_branch_may_enter_between_the_check_and_the_br(self):
+        self.assertIsNone(self.site(self.words(tail=[lambda frm, at: B(frm, at - 40)])[0]))   # a b into the vector code
+
+    def test_targets_must_be_instructions_of_the_function(self):
+        IMG[self.TABLE + 2] = 200
+        self.assertIsNone(self.site(self.words()[0]))
+
+    def test_the_compare_must_guard_the_dispatch_with_an_upper_bound_branch(self):
+        w, at = self.words(mid=[0x7100001f | 2 << 10 | 17 << 5, bcond(20, 0, 0)])   # cmp w17, #2; b.eq: the nearest compare bounds nothing
+        self.assertIsNone(self.site(w))
+
+    def test_no_control_flow_between_the_guard_and_the_br(self):
+        w, at = self.words(); w[100] = B(400, 0)   # an unconditional b out of the vector code
+        self.assertIsNone(self.site(w))
+        w, at = self.words(); w[100] = RET
+        self.assertIsNone(self.site(w))
+
+    def test_the_adr_comes_after_the_compare_on_every_path(self):
+        w, at = self.words(); k = next(i for i, x in enumerate(w) if x == LDRB_W0_X3_X17) - 1   # the adr word
+        w.insert(2, w.pop(k))   # before the compare: x18 then holds the adr value on one path only
+        self.assertIsNone(self.site(w))
+
+    def test_a_base_loaded_from_memory_is_not_guessed_from_an_unrelated_adrp(self):
+        w, at = self.words(); w[0:2] = [0xf9400003, NOP]   # ldr x3, [x0]
+        w += [ADRP(3, 4 * len(w), self.TABLE), ADDI(3, 3, self.TABLE & 0xfff)]   # an adrp + add of x3 after the function's ret
+        self.assertIsNone(self.site(w))
+
+    def test_lr_is_the_entry_register_x30(self):
+        w, at = self.words(); k = next(i for i, x in enumerate(w) if x == LDRB_W0_X3_X17)
+        w[k:k + 2] = [LDRB_W0_X3_X17 | 30, mov(30, 5), 0x8b000000 | 2 << 10 | 30 << 16 | 18 << 5 | 18]   # ldrb w30,[x3,x17]; mov x30,x5; add x18,x18,x30,lsl #2
+        self.assertIsNone(self.site(w))
 
 
 if __name__ == '__main__': unittest.main()

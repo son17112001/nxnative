@@ -771,6 +771,43 @@ def jump_adr_offsets(insl, j):
         ok = [tb for tb in table_cands(insl, tb_reg) if (t := targets(tb)) and all(fa <= x < fb and x % 4 == 0 for x in t)]
         return targets(ok[0]) if len(ok) == 1 else None
     return None
+def jump_adr_bytes(insl, j):
+    """Byte entries ×4 relative to an adr, the br far below the dispatch (EA SPORTS FC 24 main+0x15746f4: cmp w17,#4; b.hi; ...; adr x18,#L; ldrb w0,[x3,x17];
+    add x18,x18,x0,lsl #2; 160 vector instructions; br x18) → target = L + 4 × entry, the table base x3 from adrp + add. jump_adr_offsets' form with byte entries and no window:
+    the code from the check to the br holds no call and is entered only through the check (no branch of the function lands in between). Tried last; all targets, or None"""
+    def gp(name):   # general-purpose registers only (q17 is not w17); capstone names x30 'lr' and x29 'fp'
+        name = {'lr': 'x30', 'fp': 'x29'}.get(name, name)
+        return 'w' + name[1:] if re.fullmatch(r'[xw]\d+', name) else None
+    def writes(p, reg): return any(gp(p.reg_name(r)) == reg for r in p.regs_access()[1])
+    k = next((k for k in range(j - 1, -1, -1) if writes(insl[k], 'w18')), None)   # the nearest writer of x18
+    m = re.fullmatch(r'x18, x18, x(\d+), lsl #2', insl[k].op_str) if k is not None and insl[k].mnemonic == 'add' else None
+    if not m: return None
+    kl = next((i for i in range(k - 1, -1, -1) if writes(insl[i], 'w' + m.group(1))), None)   # the entry's load
+    ka = next((i for i in range(k - 1, -1, -1) if writes(insl[i], 'w18')), None)   # the adr base
+    lm = re.fullmatch(rf'w{m.group(1)}, \[(x\d+), x(\d+)\]', insl[kl].op_str) if kl is not None and insl[kl].mnemonic == 'ldrb' else None
+    if not lm or ka is None or insl[ka].mnemonic != 'adr': return None
+    tb_reg, idx, kc = lm.group(1), {'w' + lm.group(2)}, None
+    for i in range(kl - 1, -1, -1):   # back from the load to the bounds check, through register copies of the index
+        p = insl[i]
+        mm = re.fullmatch(r'(w\d+), (w\d+)', p.op_str) if p.mnemonic == 'mov' else None
+        if mm and mm.group(1) in idx: idx.add(mm.group(2)); continue
+        mm = re.fullmatch(r'(w\d+), #(0x[0-9a-f]+|\d+)', p.op_str) if p.mnemonic == 'cmp' else None
+        if mm and mm.group(1) in idx: kc = i; break
+        if any(gp(p.reg_name(r)) in idx for r in p.regs_access()[1]): return None   # the index changes after the check
+    # The compare must guard the dispatch (an upper-bound branch right after it), come before the adr, and the code from it to the br must be one straight run: no gap, no branch,
+    # call or return in it, and nothing resolved or branched into it (the vector code between check and br is not control flow)
+    if kc is None or kc > ka or insl[kc + 1].mnemonic not in ('b.hi', 'b.hs'): return None
+    lo, hi = insl[kc].address, insl[j].address
+    run = insl[kc:j + 1]
+    if any(q.address != p.address + 4 for p, q in zip(run, run[1:])): return None
+    def branch(p): return p.mnemonic in ('b', 'bl', 'cbz', 'cbnz', 'tbz', 'tbnz') or p.mnemonic.startswith('b.')
+    if any(branch(p) or p.mnemonic in ('blr', 'br', 'ret') for p in run[2:-1]): return None
+    if any(branch(p) and p.operands[-1].type == ARM64_OP_IMM and lo < p.operands[-1].imm <= hi for p in insl): return None
+    if any(lo < t <= hi for ts in tabjumps.values() for t in ts): return None
+    n, at, code = int(insl[kc].op_str.split('#')[1], 0) + 1, insl[ka].operands[1].imm, {p.address for p in insl}
+    tb = table_base(insl, kl, tb_reg, far=True)
+    t = [at + 4 * IMG[tb + i] for i in range(n)] if tb is not None and 0 <= tb and tb + n <= len(IMG) else None
+    return t if t and all(x in code and not lo < x <= hi for x in t) else None
 def table_cands(insl, rb):
     """Every address an adrp rb + add rb,rb,#lo pair in the function builds, sorted"""
     cands = set()
@@ -1007,6 +1044,7 @@ for fa, fb in funcs:
                 if not tgt: tgt = jump_masked_pred(insl, j)   # the check on a masked copy made in the block, the index masked in the block that branches to it
                 if not tgt: tgt = jump_masked_not(insl, j)   # a complemented low-bit index with its zero case branched away: exactly mask entries
                 if not tgt: tgt = jump_offsets(insl, j, copy_first=True, far_base=True, forward_base=True)   # a unique base initialized in a later block that branches backward
+                if not tgt: tgt = jump_adr_bytes(insl, j)   # byte entries ×4 after an adr, the br far below the dispatch
                 assert tgt, f'jump table {ins.address:x}'
                 tabjumps[ins.address] = tgt; continue
             jumps[ins.address] = (base, width)
