@@ -592,7 +592,7 @@ Cuts of Nintendo SDK `sdk` builds ([sdk_patches.py](../../dm/tools/sdk_patches.p
 - **sdk** `574284b4…` ([sdk_patches.py:135](../../dm/tools/sdk_patches.py#L135)): The Legend of Zelda: Breath of the Wild 1.9.0, The Legend of Zelda: Tears of the Kingdom 1.4.3
   - cut `+0x145d0c`: AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000
   - cut `+0x145d78`: AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000
-- **sdk** `8bfebccd…` ([sdk_patches.py:141](../../dm/tools/sdk_patches.py#L141)): BALL x PIT 1.293
+- **sdk** `8bfebccd…` ([sdk_patches.py:141](../../dm/tools/sdk_patches.py#L141)): BALL x PIT 1.293, Frostpunk Demo 1.0.0
   - cut `+0x145d0c`: AddressRegionManager constructor: node area limit mov w8,#0x3fe00000 → mov w8,#0x3e00000
   - cut `+0x145d78`: AddressRegionManager constructor: length of the node area registered as an occupied region mov w9,#0x3fe00000 → mov w9,#0x3e00000
 - **sdk** `60751516…` ([sdk_patches.py:148](../../dm/tools/sdk_patches.py#L148)): Donkey Kong Country Returns HD 1.1.0, Monster Train 2 1.1.1, Super Mario Galaxy 1.3.1, Super Mario Galaxy 2 1.4.0
@@ -657,7 +657,7 @@ Dead code unless such a build is run; a candidate for removal, or for a build ro
 
 ## Translator rules keyed by a shader's code
 
-- [Program.cs:217](../../dm/gfx/tools/dmsh_xlate/Program.cs#L217): Tears of the Kingdom 1.4.3 visibility counter (one vertex shader, exact code SHA-256 below)
+- [Program.cs:220](../../dm/gfx/tools/dmsh_xlate/Program.cs#L220): Tears of the Kingdom 1.4.3 visibility counter (one vertex shader, exact code SHA-256 below)
 
 ## Profile switches
 
@@ -668,6 +668,7 @@ Profile keys (`game.tsv`) whose value changes what the host does, set away from 
 | `game_env DOTNET_GCRegionRange=60000000` | [Absolum](../../dm/games/0100A83022A22000/README.md) |
 | `present_snap on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) |
 | `pso_mtl4 on` | [The Legend of Zelda: Breath of the Wild](../../dm/games/01007EF00011E000/README.md) |
+| `shader_global_window on` | [Frostpunk Demo](../../dm/games/0100193028708000/README.md) |
 | `stdalloc_cap 0xa0000000` | [Absolum](../../dm/games/0100A83022A22000/README.md) |
 | `vconv_range on` | [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md) |
 | `fps_hold off` | [Hyrule Warriors: Age of Calamity](../../dm/games/01002B00111A2000/README.md), [Paper Mario: The Thousand-Year Door](../../dm/games/0100ECD018EBE000/README.md) |

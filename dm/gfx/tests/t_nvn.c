@@ -99,6 +99,9 @@ int main(void) {
     P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x30, &v); EXPECT("newest GPU code minor", 16, v);
     P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x2F, &v); EXPECT("oldest GPU code major", 1, v);
     P(nvnDeviceGetInteger)(&dev, (NVNdeviceInfo)0x31, &v); EXPECT("oldest GPU code minor", 5, v);
+    // Frostpunk sizes its per-stage binding arrays for min(separate textures, separate samplers) = 32 (main+0x1aa6b08, 0x300 / 24 per stage)
+    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_TEXTURE_BINDINGS_PER_STAGE, &v); EXPECT("separate texture bindings per stage (128 measured on X1)", 128, v);
+    P(nvnDeviceGetInteger)(&dev, NVN_DEVICE_INFO_SEPARATE_SAMPLER_BINDINGS_PER_STAGE, &v); EXPECT("separate sampler bindings per stage (32)", 32, v);
 
     NVNsamplerBuilder sb; NVNsampler sampler;
     P(nvnSamplerBuilderSetDefaults)(&sb);

@@ -73,9 +73,15 @@ static const ent T[0x9D] = {
 // NVN ASTC order: 4x4 5x4 5x5 6x5 6x6 8x5 8x6 8x8 10x5 10x6 10x8 10x10 12x10 12x12; Metal skips one number between 6x6 and 8x5
 static const uint8_t astc_off[14] = {0, 1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 14};
 
+// DM_NVN_BC3_ASTC=1 (nvn_fmt_bc3_astc): DXT5 / DXT5 sRGB textures are ASTC 4x4 LDR / sRGB, for a RomFS whose BC3 blocks were re-encoded as ASTC 4x4 in place (liquid_astc.py; both
+// take 16 bytes per 4x4 block, so every size, offset and block-linear address stays the same). For GPUs without BC (A16 and earlier); the build that converts the RomFS sets it
+static int g_bc3_astc;
+void nvn_fmt_bc3_astc(int on) { g_bc3_astc = on; }
+
 int nvn_fmt_to_mtl(int f, uint32_t *mtl, uint8_t swz[4]) {
     ent e = {0, 0, 0, 0};
     if (f >= 0x79 && f <= 0x94) { int k = (f - 0x79) % 14; e = (ent){(uint16_t)((f < 0x87 ? ASTC_LDR0 : ASTC_SRGB0) + astc_off[k]), 1, 0, 0}; }
+    else if (g_bc3_astc && (f == 0x44 || f == 0x48)) e = (ent){(uint16_t)(f == 0x48 ? ASTC_SRGB0 : ASTC_LDR0), 1, 0, 0};
     else if (f > 0 && f < (int)(sizeof T / sizeof *T)) e = T[f];
     if (mtl) *mtl = e.kind ? e.mtl : 0;
     if (swz) { swz[0] = e.rb ? NVN_SWZ_B : NVN_SWZ_R; swz[1] = NVN_SWZ_G; swz[2] = e.rb ? NVN_SWZ_R : NVN_SWZ_B; swz[3] = e.noalpha ? NVN_SWZ_ONE : NVN_SWZ_A; }

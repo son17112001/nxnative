@@ -391,6 +391,8 @@ void mtl_init(void) {
     g_res_check_on = getenv("DM_RES_CHECK") != NULL;
     g_dev = MTLCreateSystemDefaultDevice();
     if (!g_dev) MDIE("no Metal device");
+    { const char *b3 = getenv("DM_NVN_BC3_ASTC"); if (b3 && !strcmp(b3, "1")) { nvn_fmt_bc3_astc(1); MLOG("DXT5 textures are ASTC 4x4 (DM_NVN_BC3_ASTC=1: the RomFS's BC3 blocks were re-encoded)"); }
+      else if (![g_dev supportsBCTextureCompression]) MLOG("[RED] this GPU cannot sample BC textures (A16 or earlier) and DM_NVN_BC3_ASTC is not set: BC textures will not be created"); }
     if (!g_dev.hasUnifiedMemory) MDIE("needs a unified-memory device (zero-copy memory pools)");
     g_q = [g_dev newCommandQueue];
     // A device without Metal 4 (the paravirtualized GPU of a virtual Mac, such as GitHub's macos-26 runner: no residency set, no MTL4CommandQueue) cannot run the NVN layer. The GL and
@@ -1581,6 +1583,7 @@ static const pfv_pair g_pfv_srgb[] = {
     {MTLPixelFormatBC2_RGBA, MTLPixelFormatBC2_RGBA_sRGB},
     {MTLPixelFormatBC3_RGBA, MTLPixelFormatBC3_RGBA_sRGB},
     {MTLPixelFormatBC7_RGBAUnorm, MTLPixelFormatBC7_RGBAUnorm_sRGB},
+    {MTLPixelFormatASTC_4x4_LDR, MTLPixelFormatASTC_4x4_sRGB},   // DXT5 under DM_NVN_BC3_ASTC (nvn_fmt_mtl.c)
 };
 static int tex_need_pfv(MTLPixelFormat base, MTLPixelFormat view) {
     if (base == view) return 0;
@@ -6457,6 +6460,19 @@ static void ubo_read(int stage, int reg, int off, size_t n, void *out) {
     memcpy(out, base + mo, n);
 }
 static uint32_t ubo_handle(int stage, int reg, int off) { uint32_t h; ubo_read(stage, reg, off, 4, &h); return h; }
+// The global memory window (profile key shader_global_window): accesses to global memory that no storage buffer descriptor gives go through the stage's last c0 storage buffer slot
+// (GlobalToStorage.cs). It is filled with the memory pool the first pointer in uniform slot src points into: Frostpunk's mesh shaders read a pointer per instance from uniform slot 13
+// (c16) at 8 × (instance - base instance) and their instance data at fixed offsets from it (+496, +500, ...); the shader checks each address against the window and reads 0 outside it.
+// 0 when there is no such pointer or it is in no pool (the shader then reads 0, as before the window)
+static int gmem_window(int stage, int src, uint64_t *addr, uint64_t *size) {
+    *addr = *size = 0;
+    uint64_t p = 0; ubo_read(stage, src, 0, 8, &p);
+    void *mb; uint64_t mo;
+    if (!p || !mtl_addr(p, 1, &mb, &mo)) return 0;
+    *addr = p - mo; *size = ((__bridge id<MTLBuffer>)mb).length;   // the pool's zero-copy buffer: page-aligned start, the storage alignment the translator assumes (16) holds
+    if (*size > 0xffffffffull) *size = 0xffffffffull;   // the c0 entry's size is 32 bits
+    return 1;
+}
 // A handle read from a uniform buffer names IDs of the pools bound when the draw runs: as bound handles are moved at recording (hle_nvn.c bind_handles), these take the bases here (0 = none)
 static int ubo_tex_id(uint32_t h) { int t = (int)(h & 0xfffff); return t ? t + S.tex_base : 0; }
 static int ubo_samp_id(uint32_t h) { int s = (int)(h >> 20); return s ? s + S.samp_base : 0; }
@@ -6469,7 +6485,7 @@ static int encode_args(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, in
 static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, int metal_vertex) {
     if (!sh->ae) return 1;
     args_sync_dirty();
-    if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 && !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst)) {
+    if (!passdump() && !g_args_dirty[nvn_stage] && sh->ab_buf && sh->ab_pass == g_pass.serial && nvn_stage != 5 && !(sh->rf.drv_read[0] && sh->ab_binst != g_draw_binst) && !sh->rf.gmem) {
         bind_args(en, nvn_stage, metal_vertex, sh->ab_buf, sh->ab_gpu, sh->ab_off, sh->rf.abi);
         g_stat_args_reuse++;
         return 1;
@@ -6481,6 +6497,15 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
     static uint64_t bl_pass[6]; static int bl_all = -1; if (bl_all < 0) bl_all = getenv("DM_NVN_PASSDUMP_ALL") != NULL;   // Record on every new encode (otherwise only the first time per pass per stage)
     int bl = passdump() && (bl_all || g_kd_force || bl_pass[nvn_stage] != g_stat_pass);
     if (bl) { bl_pass[nvn_stage] = g_stat_pass; PD("K %llu st%d key=%s nb=%d", g_stat_pass, nvn_stage, sh->key[0] ? sh->key : sh->builtin ? sh->builtin : "?", sh->rf.nb); }
+    // The global memory window's slot and range for this draw (gmem_window): replaces the game's binding of that slot in the c0 table and in the slot's own pointer
+    int gw_reg = -1; p_bind_buf gw = {0};
+    if (sh->rf.gmem) for (int i = 0; i < sh->rf.nb; i++) if (sh->rf.b[i].kind == NVN_RB_SBUFP && sh->rf.b[i].gsrc) {
+        const nvn_rbind *b = &sh->rf.b[i];
+        if (b->gsrc == 0xff) { if (!(sh->logged & 16)) { sh->logged |= 16; MLOG("[RED] shader %s (stage %d): global memory window with no known pointer source; it reads 0", sh->key, nvn_stage); } break; }
+        gw_reg = b->reg; gw.stage = nvn_stage; gw.index = b->reg;
+        if (!gmem_window(nvn_stage, b->gsrc - 1, &gw.addr, &gw.size) && !(sh->logged & 16)) { sh->logged |= 16; MLOG("[RED] shader %s (stage %d): the global memory window's pointer (uniform slot %d +0) is in no memory pool; it reads 0", sh->key, nvn_stage, b->gsrc - 1); }
+        break;
+    }
     os_unfair_lock_lock(&g_rmu);   // The texture / sampler registration tables may be being grown or rewritten by the game thread
     for (int i = 0; i < sh->rf.nb; i++) {
         const nvn_rbind *b = &sh->rf.b[i];
@@ -6630,7 +6655,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 USE(ss ? ss : dummy_samp(), MTLResourceUsageRead);
             }
         } else if (b->kind == NVN_RB_SBUFP || b->kind == NVN_RB_UBOP) {   // B: storage buffers / compute-stage uniforms are device pointers; the address is taken by NVN slot
-            const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : &S.ssbo[nvn_stage][reg]) : NULL;
+            const p_bind_buf *u = reg < 16 ? (b->kind == NVN_RB_UBOP ? &S.ubo[nvn_stage][reg] : reg == gw_reg ? &gw : &S.ssbo[nvn_stage][reg]) : NULL;
             void *mb; uint64_t mo, gpu;
             if (u && u->addr && mtl_gpu_addr(u->addr, u->size ? u->size : 1, &mb, &mo, &gpu)) { slots[aid] = gpu; USE((__bridge id<MTLBuffer>)mb, b->rw ? MTLResourceUsageRead | MTLResourceUsageWrite : MTLResourceUsageRead); if (b->rw && b->kind == NVN_RB_SBUFP && !(reg < 32 && (sh->sb_ro >> reg & 1))) sbw_note(u->addr, u->size, SBW_GPU); }   // cb_extent.tsv: slots the shader never writes
             else { slots[aid] = dummy_buf_gpu(); USE(dummy_buf(), MTLResourceUsageRead); }
@@ -6658,7 +6683,7 @@ static int encode_args_(id<MTLCommandEncoder> en, NvShader *sh, int nvn_stage, i
                 if (bank == 0) {
                     int base = c0_ssbo_base(nvn_stage);
                     if (base < 0) RED_ONCE(45, "stage %d shader reads driver segment c0; the storage buffer table base was never measured", nvn_stage);
-                    else for (int r = 0; r < DMSH_C0_SSBO_SLOTS; r++) { uint64_t a = S.ssbo[nvn_stage][r].addr; uint32_t n = (uint32_t)S.ssbo[nvn_stage][r].size; memcpy(d + base + DMSH_C0_ROW * r, &a, 8); memcpy(d + base + DMSH_C0_ROW * r + 8, &n, 4); }
+                    else for (int r = 0; r < DMSH_C0_SSBO_SLOTS; r++) { const p_bind_buf *sb = r == gw_reg ? &gw : &S.ssbo[nvn_stage][r]; uint64_t a = sb->addr; uint32_t n = (uint32_t)sb->size; memcpy(d + base + DMSH_C0_ROW * r, &a, 8); memcpy(d + base + DMSH_C0_ROW * r + 8, &n, 4); }
                     // Compute also has the dispatch size at 0x200 (x, y, z) and the uniform buffer table at 0x210 + 16 r (address 64 bits, size 32 bits), ending where the storage buffer table
                     // starts (0x310). Measured on Link's Awakening's light culling (light_culling_compute.bfsha): tile index = workgroup y × c0[0x200] + workgroup x, and c0[0x280] is
                     // the address of uniform buffer 7 (the light parameters, 144 bytes per light); Breath of the Wild's compute shaders read 0x280 / 0x290 / 0x2d0 of the same table

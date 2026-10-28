@@ -32,6 +32,7 @@ typedef struct {
     uint8_t n;               // TEXD / SAMPD, and TEXU / SAMPU arrays (element k = the handle at byte 8k of the uniform buffer): array length (argument buffer entries aid .. aid + n - 1)
     uint8_t f1d;             // TEX: read by 1D integer fetches as 2D rows of 16384 texels (dmsh_build.py "fetch1d"): a buffer texture here is bound as such rows (nvn_mtl.m tbuf_as_2d)
     uint8_t atom;            // IMG: the shader runs image atomics on it (dmsh_build.py "atomic"): the texture must allow Metal's texture atomics (nvn_mtl.m dummy_img_atomic)
+    uint8_t gsrc;            // SBUFP: the global memory window (dmsh_build.py "gmem"): 1 + the uniform slot holding its pointers, 0xff = source unknown; 0 = an ordinary storage buffer slot
 } nvn_rbind;
 typedef struct {
     int nb, abi, nv;         // Binding count, argument buffer slot, vertex input count
@@ -43,6 +44,7 @@ typedef struct {
     uint8_t route_b, has_c1; // Route B; has a c1 constant segment
     uint8_t bindless;        // Has TEXU / SAMPU bindings (which texture is read is known only at replay time)
     uint8_t dyn;             // Has TEXD / SAMPD bindings: c2's texture and sampler tables hold slot indices for this shader
+    uint8_t gmem;            // Has a global memory window binding (an SBUFP with gsrc): its pool follows the pointers in a uniform buffer, so the arguments are encoded per draw
     uint8_t drv_read[3];     // B: reads driver segments c0 / c2 at runtime (indices 0, 2; gathered statically from the MSL at packaging time, tools/dmsh_build.py drv_reads)
     uint16_t c1_len;         // Length of the c1 constant segment (B; 0 / 256 / 512 / 768 across the whole library)
     // For the fully-covering-first-draw proof (dmsh_build.py raster_facts; missing field = not provable): vertex - position xyz taken as-is from attribute pos_attr (-1 = no), w is the constant 1 (pos_w1) or taken from the same attribute's .w;

@@ -227,7 +227,7 @@ Games read this count as a position in their own command memory and size their h
 - **Symptom:** driver comparisons report the wrong block dimensions for packaged 2D / 3D textures, or too little storage for linear block-compressed textures (64x64 BC1 with stride 128: 2048 bytes instead of 8192).
 - **Cause:** `SetPackagedTextureLayout` byte 0 holds log2 block height in its low nibble and log2 block depth in its high nibble. The host treated the whole byte as a 2D block height and ignored it for 3D. Linear storage was sized by compressed block rows, while NVN counts pixel rows.
 - **Fix:** `nvn_tex_layout` decodes both nibbles for 3D and only the height nibble for 2D; a present byte of zero overrides automatic dimensions too (`pkg_block_h` stores byte 0 + 1). Level offsets and CPU / GPU deswizzling use those shared dimensions, reduced for smaller mips. Both linear flags use stride times pixel height, preserving row alignment and explicit strides.
-- **Check:** `t_tex_layout` covers nine driver-derived shapes; four fail before the fix. `t_tex` also decodes packaged 3D markers at independently calculated addresses and checks mip dimensions and offsets; `t_deswz_gpu` checks both packaged 3D layouts across six mips on Metal. `MINIMAL_LAYOUT` (0x200) remains unimplemented; linear compressed-texture uploads are outside these storage checks.
+- **Check:** `t_tex_layout` covers nine driver-derived shapes; four fail before the fix. `t_tex` also decodes packaged 3D markers at independently calculated addresses and checks mip dimensions and offsets; `t_deswz_gpu` checks both packaged 3D layouts across six mips on Metal. `MINIMAL_LAYOUT` (0x200) has an entry of its own ([below](#minimal_layout-textures)); linear compressed-texture uploads are outside these storage checks.
 - **Found on:** [The Legend of Zelda: Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md): digitalhivehub's driver probes in [PR #11](https://github.com/seedds/nxnative/pull/11), ported through MacNativeGames `3c482a7` and [PR #201](https://github.com/seedds/nxnative/pull/201). Validated here with CPU and synthetic Mac GPU tests; packaged 3D / linear BC gameplay and the iPhone have not been rechecked.
 
 ### Linear textures in CPU-visible pools
@@ -373,6 +373,22 @@ Games read this count as a position in their own command memory and size their h
 - **Fix:** take the stamp before protecting and reading, and start the last-check generation at that stamp. Finish any pending protection run before waiting for a BUSY page, then retry that page. Both unprotect paths use `stamp_page` to publish the page generation and advance the global clock once more afterward, invalidating checks that ran before publication. These are general tracker and cache rules, with no game-specific gate.
 - **Found on:** [Tears of the Kingdom](../../dm/games/0100F2C0115B6000/README.md), reported in MacNativeGames commit `a166602` and ported through [PR #197](https://github.com/seedds/nxnative/pull/197). The missing-letter symptom has not been reproduced in nxnative; the tracker failures are reproduced locally by the regression tests.
 - **Check:** `t_dirty_race` covers the BUSY-page retry, stamp ordering, and a check between clock allocation and generation publication in both unprotect paths. The publication cases fail on main; the batched case also fails with the original PR applied.
+
+### `MINIMAL_LAYOUT` textures
+
+- **Symptom:** textures created with `NVN_TEXTURE_FLAGS_MINIMAL_LAYOUT` (0x200) come out in tiles and stripes: a logo cut into shifted columns, glyphs of a font atlas scrambled, sprite sheets as bars; `nvnTextureBuilderGetStorageSize` reports more than the storage the game laid out.
+- **Cause:** the host gave them the automatic block height (height in blocks × 3 / 16, then a power of two up to 16 GOBs) at every level. Under `MINIMAL_LAYOUT` the driver keeps that block height (depth) only where it divides the level's GOB rows (slices), else uses one GOB, and does not round a layer up to a block.
+- **Fix:** `nvn_tex.c` (`minimal_of`, `fit_tile`): at level 0 and again at each smaller level for the block the automatic shrinking gives it, the block height and depth are kept only when they divide the level's GOB rows and slices, else they are one GOB; a layered texture's layer is not rounded up. A packaged layout's own block size and sparse textures keep their rules.
+- **Found on:** [Frostpunk Demo](../../dm/games/0100193028708000/README.md): every `.texture` file of `textures-s3.dat` holds the storage the game hands NVN, and all 3,585 sizes (2D, cube, 2D array, 3D; 1 to 13 levels) match the rule (the automatic layout: 2,827). Decoded offline, the logo (552x800 DXT5, 25 GOB rows: one GOB), the snowflake sheet (512x256 DXT5, 8 GOB rows: eight GOBs), a font atlas (4096x176 R8, 22 GOB rows: one GOB, not two), level 2 of a 768x768 R8 atlas (24 GOB rows under a 16-GOB block: one GOB) and level 5 of a 1280x1280 DXT5 atlas read right only with it; two other rules that fit every size do not. Not measured on the driver.
+- **Check:** `t_tex_layout` has eight minimal shapes (size, layer size, level 1 offset, block height and depth), among them the font atlas and the two levels above.
+
+### Separate sampler bindings per stage
+
+- **Symptom:** a crash in the game's own binding code soon after `nnMain`, a `Release` called on an address made of two floats (Frostpunk: `addr=0x3f800000bf800010`, `main+0x1aa929c`), while it unbinds texture and sampler slot 64 of a stage.
+- **Cause:** `nvnDeviceGetInteger(NVN_DEVICE_INFO_SEPARATE_SAMPLER_BINDINGS_PER_STAGE)` (0x5F) returned 4096, a guess from the sampler pool limit. The game binds min(0x5E, 0x5F) slots per stage (`main+0x1aa6ac4` .. `0x1aa6b08`) into arrays of 32 (0x300 bytes of 24-byte slots, `main+0x1aa9248`); with 0x5E at 128 it walked past them.
+- **Fix:** `hle_nvn.c` returns 32 for 0x5F. Frostpunk runs on the Switch, so the minimum is at most 32 there and 0x5E is 128 (measured); 32 is not measured either.
+- **Found on:** [Frostpunk Demo](../../dm/games/0100193028708000/README.md).
+- **Check:** `t_nvn` checks 0x5E (128) and 0x5F (32).
 
 ## NVN entry points
 

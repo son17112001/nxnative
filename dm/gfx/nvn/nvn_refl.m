@@ -75,7 +75,8 @@ int nvn_refl_from_json(NSDictionary *j, nvn_refl *o, char *err, int errlen) {
             else if ([k isEqualToString:@DMSH_KIND_IMG]) { r->kind = NVN_RB_IMG; dummy_kind(b[@"msl_type"], &r->dtt, &r->dpf);   // rw: the shader writes it (access::write / read_write; a load-only view of the slot is not)
                 r->rw = [ty isKindOfClass:[NSString class]] && ([ty containsString:@"access::write"] || [ty containsString:@"access::read_write"]); r->atom = [b[@"atomic"] boolValue]; }
             else if ([k isEqualToString:@DMSH_KIND_TBUF]) { r->kind = NVN_RB_TBUF; uint8_t tt; dummy_kind(b[@"msl_type"], &tt, &r->dpf); }
-            else if ([k isEqualToString:@DMSH_KIND_SBUF]) { r->kind = NVN_RB_SBUFP; r->rw = sbuf_rw(b); }
+            else if ([k isEqualToString:@DMSH_KIND_SBUF]) { r->kind = NVN_RB_SBUFP; r->rw = sbuf_rw(b);
+                if ([b[@"gmem"] isKindOfClass:[NSNumber class]]) { int g = [b[@"gmem"] intValue]; r->gsrc = g >= 0 && g < 16 ? (uint8_t)(g + 1) : 0xff; o->gmem = 1; } }
             else if ([k isEqualToString:@DMSH_KIND_UBO_PTR]) r->kind = NVN_RB_UBOP;
             else if ([k isEqualToString:@DMSH_KIND_SBUF_UBO]) { r->kind = NVN_RB_SBUFU; r->rw = sbuf_rw(b); r->off = (uint16_t)[b[@"off"] intValue]; }
             else if ([k isEqualToString:@DMSH_KIND_GEOMETRY]) { if (reg < 0 || reg > 4) FAIL("invalid geometry helper slot"); r->kind = NVN_RB_GEOMETRY; }

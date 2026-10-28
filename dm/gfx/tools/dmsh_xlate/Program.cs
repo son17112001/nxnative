@@ -49,6 +49,9 @@ static class SwshXlate
         public SetBindingPair CreateConstantBufferBinding(int index) => new(0, _binding++);
         public SetBindingPair CreateImageBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
         public SetBindingPair CreateStorageBufferBinding(int index) => new(0, _binding++);
+        // Job global_window (profile key shader_global_window): accesses to global memory that no storage buffer gives go through the stage's last c0 storage buffer slot, which the
+        // host fills with the memory pool their pointer source points into (GlobalToStorage.cs, nvn_mtl.m gmem_window); the tables' bases as in dmsh_abi.h, 15 = DMSH_C0_SSBO_SLOTS - 1
+        public int QueryGlobalMemoryWindowCbOffset() => _job["global_window"] is JsonNode gw && (bool)gw && (string)_job["stage"] switch { "vs" => 0x110, "ps" => 0x510, "cs" => 0x310, "gs" => 0x410, _ => -1 } is int b and >= 0 ? (b + 15 * 0x10) / 4 : -1;
         public SetBindingPair CreateTextureBinding(int count, bool isBuffer) { int b = _binding; _binding += count; return new(0, b); }
         public ReadOnlySpan<ulong> GetCode(ulong address, int minimumSize) => MemoryMarshal.Cast<byte, ulong>(new ReadOnlySpan<byte>(_code)[(int)address..]);
         public int QuerySamplerArrayLengthFromPool() => 32;

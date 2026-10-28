@@ -182,6 +182,12 @@ The replay on Metal (`dm/gfx/nvn/nvn_mtl.m`) and the Vulkan and OpenGL layers. E
 - **Found on:** reported by MacNativeGames (`f864eb0`): a mod's 1×1 texture in Tears of the Kingdom declaring 9 levels. No game here is known to reach it; the sample counts (an M4 Pro has 1, 2 and 4, and a multisample texture of one sample aborts) were checked on that Mac while porting the fix.
 - **Check:** `t_view_levels` makes each case with Metal's validation layer on: a 1×1 texture of 9 levels, a 3D texture whose depth holds the levels, an array of no layers, a 1D array of 4,096 layers, an 8-sample and a 1-sample multisample texture, and a copy at a missing level.
 
+### BC3 textures on GPUs without BC
+
+- **Symptom:** on an A16 or older iPhone (`supportsBCTextureCompression` NO) a game whose textures are BC3 cannot create them; the host logs `[RED] this GPU cannot sample BC textures (A16 or earlier) and DM_NVN_BC3_ASTC is not set`.
+- **Fix:** BC3 and ASTC 4x4 blocks are both 16 bytes for 4x4 texels and both stand alone, so a block can be re-encoded where it lies, in a texture's storage as the game lays it out: sizes, offsets and block-linear addresses stay the same. `dm/tools/liquid_astc.py` re-encodes the DXT5 blocks of a Liquid Engine `textures-s3.dat` (Xcode's TextureConverter: BC3 decoded, ASTC 4x4 encoded, the values as stored, so an sRGB texture stays sRGB) into a copy of the RomFS, and `DM_NVN_BC3_ASTC=1` makes the host create DXT5 / DXT5 sRGB textures as ASTC 4x4 LDR / sRGB (`nvn_fmt_mtl.c`). The NSP script's `--bc3-astc` does both and builds the switch in.
+- **Found on:** [Frostpunk Demo](../../dm/games/0100193028708000/README.md): 3,402 textures in about 110 s on an M4; on the Mac with the converted RomFS the title, the menus and the city look as with BC3. Not checked on an iPhone.
+
 ## Render targets, passes and clears
 
 ### Transient render targets shared by storage

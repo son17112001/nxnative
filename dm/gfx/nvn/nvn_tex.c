@@ -73,6 +73,15 @@ static void samples_xy(int s, uint32_t *sx, uint32_t *sy) {
 // gave 0x30000), a 1350×270 BGRA8 one 88 GOBs × three 16-GOB block rows. UE sizes its upload buffer from the host's layout, and the larger level data overran it into the heap
 enum { SPARSE_TILE = 0x10000 };
 static int sparse_of(const nvn_texdesc *d) { return (d->flags & 0x20) && !(d->flags & 0x50) && d->target != 10; }
+// MINIMAL_LAYOUT (flag 0x200; a packaged layout's own block size wins): the automatic block height (depth) is kept only where it divides the GOB rows (slices), else blocks
+// are one GOB high (deep): at level 0, and again at each smaller level for the block the automatic shrinking gives it from level 0's, so no level is padded past a GOB; layers
+// are not rounded up to a block. Measured on Frostpunk, which creates nearly all its textures with this flag on storage holding its .texture files (259 of the first 271):
+// all 3,585 files of textures-s3.dat (2D, cube, 2D array, 3D; 1 to 13 levels) are exactly that size (the automatic layout: 2,827), and decoded that way these read right
+// where other rules that fit every size do not: the logo (552x800 DXT5, 25 GOB rows: one GOB), the snowflake sheet (512x256 DXT5, 8 GOB rows: eight GOBs), the subtitle
+// font (4096x176 R8, 22 GOB rows: one GOB, not two), citizen_panel_atlas level 2 (192x192 R8, 24 GOB rows under a 16-GOB block: one GOB, not eight) and tech_tree_atlas2
+// level 5 (a 2-GOB level of a texture whose level 0 fell back to one GOB: one GOB). With the automatic layout the menus came out in tiles and stripes. Not measured on the driver
+static int minimal_of(const nvn_texdesc *d) { return (d->flags & 0x200) && !d->pkg_block_h && !sparse_of(d); }
+static unsigned fit_tile(unsigned shift, uint32_t units) { return units & ((1u << shift) - 1) ? 0 : shift; }
 // A sparse 2D texture without a packaged layout whose level 0 is at least one tile wide and high takes the block height of its 64 KB tile instead of the automatic one: the tile's shape in blocks is the standard one,
 // 256×256 / 256×128 / 128×128 / 128×64 / 64×64 blocks for 1 / 2 / 4 / 8 / 16 bytes per block, so its rows make a block height of 32 / 16 / 16 / 8 / 8 GOBs
 // (log2 5 / 4 / 4 / 3 / 3); -1 for other block sizes. OCTOPATH TRAVELER's world map (4096×2048 BC1, 512 block rows) is laid out in 8 GOBs where the automatic rule gives 16:
@@ -100,6 +109,7 @@ static uint64_t level_walk(const nvn_texdesc *d, unsigned level, unsigned dpl, u
         uint32_t lwb = lw * t.bpb;
         unsigned th = adj_tile(tileH, 8, lh), td = adj_tile(tileD, 1, ld);
         uint32_t wg = (lwb + 63) / 64, hg = (lh + 7) / 8;
+        if (minimal_of(d)) { th = fit_tile(th, hg); td = fit_tile(td, ld); }
         tiled = tiled && lwb >= tw * 64 && lh >= 8u << sh && ld >= 1u << tileD;
         if (tiled) wg = (wg + tw - 1) / tw * tw;
         if (i == level) { if (gobs) *gobs = wg; return off; }
@@ -140,11 +150,12 @@ void nvn_tex_layout(const nvn_texdesc *d, nvn_texlayout *o) {
                && blk(h * sy, t.bh) >= 8u << sparse_tile_h(t.bpb)) tileH = (unsigned)sparse_tile_h(t.bpb);
     else if (dpl == 2) { uint32_t ah = blk(h * sy, t.bh); tileH = pick_tile(ah * 3 / 16); }
     else if (dpl == 3) tileD = pick_tile(z + z / 2);
+    if (minimal_of(d)) { tileH = fit_tile(tileH, (blk(h * sy, t.bh) + 7) / 8); tileD = fit_tile(tileD, z); }
     o->tileH = tileH; o->tileD = tileD;
     unsigned levels = d->levels ? d->levels : 1;
     uint64_t ls = level_offset(d, levels, dpl, w, h, z, tileH, tileD, t);
     if (sparse_of(d)) ls = (ls + SPARSE_TILE - 1) & ~(uint64_t)(SPARSE_TILE - 1);
-    if (layered) {                                                    // Layer size is aligned to the block
+    if (layered && !minimal_of(d)) {                                  // Layer size is aligned to the block (a minimal layout's is not)
         uint32_t hh = blk(h, t.bh); unsigned th = tileH, td = tileD;
         while (th && hh <= (8u << (th - 1))) th--;
         while (td && z <= (1u << (td - 1))) td--;
@@ -204,6 +215,7 @@ void nvn_tex_level_tiles(const nvn_texdesc *d, unsigned level, unsigned *tileH, 
     uint32_t ld = dpl >= 3 ? mip(z, level) : 1;
     *tileH = adj_tile(L.tileH, 8, lh);
     *tileD = adj_tile(L.tileD, 1, ld);
+    if (minimal_of(d)) { *tileH = fit_tile(*tileH, (lh + 7) / 8); *tileD = fit_tile(*tileD, ld); }
 }
 
 int nvn_tbuf_rows(uint64_t n, uint32_t bpb, uint32_t align, uint32_t *w, uint32_t *h, uint32_t *row) {
