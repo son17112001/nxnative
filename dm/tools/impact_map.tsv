@@ -24,6 +24,7 @@ dm/games/*	profile	one game's profile
 scripts/build_ipa_from_nsp.py	*:*	packing: every game's build
 scripts/bench.py	-	the benchmark
 scripts/push_romfs.sh	*:*	RomFS transfer: every game's iOS build
+scripts/romfs_bc7_astc.py	api:vulkan	BC7 to ASTC 4x4 RomFS transcode: a Vulkan game's build for GPUs without BC (Hades)
 scripts/regress.py	-	the regression harness
 dm/tools/usage.py	-	the usage manifests
 dm/tools/impact_map.tsv	-	this map

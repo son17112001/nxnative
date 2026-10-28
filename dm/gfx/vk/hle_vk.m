@@ -12,7 +12,8 @@
 //     row says which Metal slot each (set, binding) went to (an array of n descriptors: n slots from there; push constants: their own buffer slot);
 //     vertex buffers sit at slot 30 - binding;
 //   · swapchain images are registered with the NVN layer's present path (mtl_ext_tex), which shows a frame once g_ev reaches the value of the frame's last submit.
-// Environment: DM_VK_LOG=1 logs object creation; DM_VK_CAPTURE=<dir> writes every SPIR-V module the game creates (sh_capture).
+// Environment: DM_VK_LOG=1 logs object creation; DM_VK_CAPTURE=<dir> writes every SPIR-V module the game creates (sh_capture); DM_VK_BC7_ASTC=1 creates BC7 images as
+// ASTC 4x4 textures, for a RomFS transcoded by scripts/romfs_bc7_astc.py (fmt_init).
 #define VK_NO_PROTOTYPES
 #include "../../host/hle.h"
 #include "../nvn/nvn_mtl.h"
@@ -104,7 +105,16 @@ static const fmt_t g_fmts[] = {
     FV(R16G16B16A16_USCALED, UShort4, 8), FV(R16G16B16A16_SSCALED, Short4, 8),
 };
 static const fmt_t *g_fmt_by[VK_FORMAT_ASTC_12x12_SRGB_BLOCK + 1];
-static void fmt_init(void) { for (size_t i = 0; i < sizeof g_fmts / sizeof *g_fmts; i++) g_fmt_by[g_fmts[i].vk] = &g_fmts[i]; }
+// DM_VK_BC7_ASTC=1: the game's BC7 images are ASTC 4x4 textures, for a RomFS whose BC7 texture data scripts/romfs_bc7_astc.py transcoded to ASTC 4x4 (Hades on GPUs
+// without BC, A16 and earlier). Both store a 4x4 block in 16 bytes, so sizes, copies and views keep the game's arithmetic; the image keeps the game's format (im->fmt)
+static void fmt_init(void) {
+    for (size_t i = 0; i < sizeof g_fmts / sizeof *g_fmts; i++) g_fmt_by[g_fmts[i].vk] = &g_fmts[i];
+    const char *bc7 = getenv("DM_VK_BC7_ASTC");
+    if (bc7 && !strcmp(bc7, "1")) {
+        g_fmt_by[VK_FORMAT_BC7_UNORM_BLOCK] = g_fmt_by[VK_FORMAT_ASTC_4x4_UNORM_BLOCK]; g_fmt_by[VK_FORMAT_BC7_SRGB_BLOCK] = g_fmt_by[VK_FORMAT_ASTC_4x4_SRGB_BLOCK];
+        LOG("[vk] BC7 images are ASTC 4x4 textures (DM_VK_BC7_ASTC=1)");
+    }
+}
 static const fmt_t *fmt_of(VkFormat f) {
     static pthread_once_t once = PTHREAD_ONCE_INIT; pthread_once(&once, fmt_init);
     return (unsigned)f < sizeof g_fmt_by / sizeof *g_fmt_by ? g_fmt_by[f] : NULL;

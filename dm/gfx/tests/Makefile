@@ -347,6 +347,13 @@ check_t_gl_imports: t_gl_imports
 	./t_gl_imports --stubs
 gl-imports: check_t_gl_imports
 check_t_vk_desc: RUN_ENV = MTL_DEBUG_LAYER=1
+# BC7 images as ASTC 4x4 under DM_VK_BC7_ASTC (the #included Vulkan layer, as t_vk_desc), run with the switch off and on
+t_vk_bc7_astc: t_vk_bc7_astc.m ../vk/hle_vk.m $(MTL_T_DEP)
+	clang $(CFLAGS) -I../../third_party/vulkan-headers/include -fobjc-arc -o $@ t_vk_bc7_astc.m $(MTL_T_SRC) ../nvn/nvn_mtl.m $(FW)
+.PHONY: check_t_vk_bc7_astc
+check_t_vk_bc7_astc: t_vk_bc7_astc
+	MTL_DEBUG_LAYER=1 ./t_vk_bc7_astc
+	MTL_DEBUG_LAYER=1 DM_VK_BC7_ASTC=1 ./t_vk_bc7_astc
 # Float32 missing components retain float padding through integer shader inputs.
 t_float_pad: t_float_pad.m $(MTL_T_DEP)
 	clang $(CFLAGS) -fobjc-arc -o $@ t_float_pad.m $(MTL_T_SRC) $(FW)
